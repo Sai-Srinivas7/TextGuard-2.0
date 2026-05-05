@@ -11,3 +11,4 @@ spacy
 PyMuPDF 
 python-docx
 tqdm
+sentencepiece
