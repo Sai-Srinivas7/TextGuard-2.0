@@ -218,7 +218,6 @@ The paper is honest about these and so is this README:
 - Results are from a single document-grouped split, not k-fold CV.
 - The 6.4:1 imbalance is moderate; the focal-loss negative result
   should not be extrapolated to extreme (50:1+) imbalance regimes.
-- Spanish was the only back-translation pivot we tested.
 
 ## Contact
 
