@@ -1,0 +1,13 @@
+
+torch
+numpy
+pandas
+scikit-learn
+transformers
+datasets
+evaluate
+accelerate
+spacy
+PyMuPDF 
+python-docx
+tqdm
