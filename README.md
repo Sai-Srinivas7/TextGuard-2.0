@@ -1,116 +1,226 @@
-# End-to-End NLP Pipeline: Governance & Compliance
+# TextGuard 2.0
 
-This repository contains an end-to-end Natural Language Processing (NLP) pipeline designed for governance and compliance tasks. It demonstrates how to process project documents, train a risk classification model, and annotate PDFs with identified risks.
+Hierarchical attention for compliance risk detection in development-bank
+documents. This repository contains the code, splits, and evaluation
+scripts for the paper *"TextGuard 2.0: Hierarchical Attention for
+Compliance Risk Detection in Development-Bank Documents"*.
 
-## Table of Contents
-1. [Introduction](#introduction)
-2. [Setup and Installation](#setup-and-installation)
-3. [Data Loading & Preprocessing](#data-loading--preprocessing)
-4. [Exploratory NLP (NER & Topic Modeling)](#exploratory-nlp-ner--topic-modeling)
-5. [Advanced Risk Classification Model Training](#advanced-risk-classification-model-training)
-    - [Hierarchical Attention Network (HAN) Architecture](#hierarchical-attention-network-han-architecture)
-    - [HAN Data Preparation](#han-data-preparation)
-    - [HAN Training Loop](#han-training-loop)
-    - [HAN Evaluation](#han-evaluation)
-6. [PDF Spatial Annotation](#pdf-spatial-annotation)
-7. [HAN PDF Inference & Attention Extraction](#han-pdf-inference--attention-extraction)
-8. [Multi-Label Risk Categorization](#multi-label-risk-categorization)
-    - [Multi-Label Dataset & Training Loop](#multi-label-dataset--training-loop)
-    - [Multi-Label Model Evaluation](#multi-label-model-evaluation)
-    - [Multi-Label PDF Inference](#multi-label-pdf-inference)
-    - [Continue Fine-Tuning](#continue-fine-tuning)
-9. [HAN-C: Data Augmentation & Focal Loss Integration](#han-c-data-augmentation--focal-loss-integration)
-    - [Back-Translation Data Augmentation](#back-translation-data-augmentation)
-    - [HAN-C Training with Focal Loss](#han-c-training-with-focal-loss)
-    - [HAN-C Evaluation](#han-c-evaluation)
-10. [End-to-End Pipeline Demo](#end-to-end-pipeline-demo)
-11. [Results Summary](#results-summary)
+## What this is
 
-## Introduction
-This project provides a comprehensive NLP pipeline for analyzing governance and compliance documents. It covers essential steps from data preparation to advanced model training and deployment for PDF annotation. Key features include:
-- **Text Cleaning and Preprocessing**
-- **Named Entity Recognition (NER)** and **Topic Modeling** for document understanding.
-- **Risk Classification** using fine-tuned DistilBERT models with custom loss functions (Focal Loss).
-- **Hierarchical Attention Networks (HAN)** for document-level classification and interpretability.
-- **Multi-Label Classification** to identify multiple risk categories simultaneously.
-- **Data Augmentation** using back-translation to address class imbalance.
-- **PDF Annotation** to visually highlight risky sentences and critical sections.
+Compliance review of Inter-American Development Bank (IDB) project
+documents is slow and inconsistent. TextGuard 2.0 is a one-level
+hierarchical attention network (HAN-CE) that reads paragraph-scale
+chunks of IDB project PDFs with DistilBERT, learns chunk-level attention
+weights, and aggregates them into a document-level risk classifier. The
+attention weights also serve as reviewer-readable evidence — pointing
+to the specific passages that drove each prediction.
 
-## Setup and Installation
-To run this notebook, you'll need to install the following Python libraries and download a spaCy language model. All necessary steps are included in the notebook's first code cell (`cb1e840c`).
+The repository covers four model configurations from the paper's
+ablation:
 
-```bash
-!pip install -q python-docx spacy transformers datasets evaluate accelerate PyMuPDF
-!python -m spacy download en_core_web_sm -q
+- **Flat BERT (TG 1.0)** — chunk-level fine-tuning, leaky chunk-split eval
+- **HAN-NoAttn** — hierarchy with mean-pooling, document-grouped eval
+- **HAN-CE (ours)** — hierarchy with learned attention, cross-entropy
+- **HAN-C** — HAN-CE plus focal loss + Spanish back-translation
+  (negative result, included for the ablation)
+
+It also covers a multi-label extension (Financial / Social /
+Environmental risk) using the same backbone.
+
+## Headline results
+
+All numbers are from the paper, reported on the document-grouped test
+split (22 held-out documents, fixed seed 42).
+
+### Risk task (Table 1 in paper)
+
+| Model | Acc | Macro-P | Macro-F1 | Risk recall | No-risk recall |
+|---|---|---|---|---|---|
+| Flat BERT (TG 1.0, leaky) | 0.910 | 0.751 | 0.710 | 0.91 | 0.50 |
+| HAN-NoAttn (mean-pool) | 0.792 | 0.701 | 0.683 | 0.97 | 0.31 |
+| **HAN-CE (ours)** | **0.9545** | **0.835** | **0.820** | **1.00** | **0.54** |
+| HAN-C (focal + ES BT) | 0.748 | 0.694 | 0.659 | 0.93 | 0.31 |
+
+### Multi-label risk categorisation (Table 3 in paper)
+
+| Category | Precision | Recall | F1 |
+|---|---|---|---|
+| Financial | 0.79 | 0.79 | 0.79 |
+| Social | 0.98 | 0.62 | 0.76 |
+| Environmental | 0.75 | 0.55 | 0.63 |
+| Macro avg | 0.85 | 0.65 | 0.73 |
+
+**Key finding:** adding focal loss and back-translation to HAN-CE
+*regresses* macro-F1 by 16 points (0.82 → 0.66). The paper diagnoses
+three reasons (focal-loss hyperparameter brittleness in low-data text,
+label drift from back-translating compliance vocabulary, and
+architectural redundancy with attention-based minority emphasis).
+HAN-C is included here so the ablation can be reproduced, not as a
+recommended configuration.
+
+## Repository contents
+
+```
+.
+├── NLP_Pipeline_GoogleStyle.ipynb    # main notebook — full pipeline
+├── requirements.txt                  # pinned dependencies
+├── data/
+│   └── Labeled_docs_data.csv         # chunk-level labels (see Data section)
+├── splits/
+│   └── doc_grouped_seed42.json       # 87 train / 22 test document IDs
+├── paper/
+│   └── neurips_2026.pdf              # camera-ready paper
+└── README.md
 ```
 
-## Data Loading & Preprocessing
-The pipeline starts by loading a `Labeled_docs_data.csv` dataset. The text data is cleaned (lowercased, non-alphabetic characters removed, whitespace normalized), and labels are mapped numerically.
+## Setup
 
-## Exploratory NLP (NER & Topic Modeling)
-Initial NLP exploration involves:
-- **Named Entity Recognition (NER)** using `spaCy` to identify entities like organizations, dates, and locations in sample text.
-- **Topic Modeling** using Latent Dirichlet Allocation (LDA) to discover latent themes within the document corpus.
+Tested on Python 3.10 with a single NVIDIA T4 GPU (Google Colab) and on
+Ubuntu 22.04 with an A100. CPU-only execution works but is slow
+(~10× slower than T4).
 
-## Advanced Risk Classification Model Training
-This section focuses on training a robust risk classification model:
+```bash
+git clone git@github.com:Sai-Srinivas7/TextGuard-2.0.git
+cd TextGuard-2.0
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+python -m spacy download en_core_web_sm
+```
 
-### Document-Level Splits
-To prevent data leakage, document-level splits are used for training and testing. Chunks belonging to the same document are kept together to ensure the model generalizes well to unseen documents.
+`requirements.txt` (pinned to versions we tested):
 
-### Tokenization
-`DistilBERT` tokenizer is used to convert text into numerical input suitable for the model.
+```
+torch==2.1.0
+transformers==4.36.2
+datasets==2.16.1
+evaluate==0.4.1
+accelerate==0.26.1
+scikit-learn==1.3.2
+spacy==3.7.2
+PyMuPDF==1.23.8
+python-docx==1.1.0
+sentencepiece==0.1.99
+sacremoses==0.1.1
+matplotlib==3.8.2
+seaborn==0.13.1
+pandas==2.1.4
+numpy==1.26.3
+```
 
-### Custom Focal Loss Trainer
-A custom `FocalLossTrainer` is implemented, extending HuggingFace's `Trainer`, to handle class imbalance by down-weighting easy examples and focusing on hard-to-classify instances.
+## Data
 
-### Hierarchical Attention Network (HAN) Architecture
-A custom PyTorch `HierarchicalAttentionNetwork` model is defined. This model processes individual text chunks using `DistilBERT` and then aggregates these chunk embeddings into a document-level representation using a soft-attention mechanism. This allows for both document-level prediction and interpretability by highlighting influential chunks.
+The labelled corpus is 109 IDB project PDFs spanning 17 sectors,
+producing 956 chunks at most 10 chunks per document (128 tokens each).
+Class imbalance is 6.4:1 toward the *risk* class.
 
-### HAN Data Preparation
-To train the HAN, chunk-level data is grouped by `document_id` and transformed into 3D tensors `(batch_size, num_chunks, sequence_length)` using a custom `HANDataset`.
+The IDB project documents themselves are publicly disclosed by the
+Bank but we do not redistribute them in this repository while we
+confirm derivative-distribution rights. To reproduce:
 
-### HAN Training & Evaluation
-The HAN model is trained using a standard PyTorch training loop and evaluated on the test set using accuracy and a classification report.
+1. Place `Labeled_docs_data.csv` (chunk-level labels) at
+   `data/Labeled_docs_data.csv`. The CSV schema is:
+   ```
+   document_id, chunk_id, chunk_text, risk_label, compliance_label,
+   financial_risk, social_risk, environmental_risk
+   ```
+2. The fixed train/test split (87/22 documents, seed 42) is in
+   `splits/doc_grouped_seed42.json`. The notebook loads this directly
+   so the split is deterministic across machines.
 
-## PDF Spatial Annotation
-The fine-tuned DistilBERT model is used to identify and highlight high-risk sentences directly within PDF documents, providing visual cues for compliance officers.
+If you don't have the CSV, contact the authors.
 
-## Multi-Label Risk Categorization
-To identify specific risk types (Financial, Social, Environmental), a multi-label classification approach is implemented:
+## How to reproduce the paper
 
-### Multi-Label HAN Architecture
-A `MultiLabelHAN` model extends the binary HAN to predict multiple risk categories simultaneously. It uses `BCEWithLogitsLoss` for independent binary predictions per category.
+The whole pipeline runs from one notebook. Pick one:
 
-### Data Preparation & Training
-`MultiLabelHANDataset` is created to output a vector of labels per document. The model is trained with `BCEWithLogitsLoss`.
+**Option A — interactive:**
+```bash
+jupyter notebook NLP_Pipeline_GoogleStyle.ipynb
+```
+Run all cells top to bottom.
 
-### Evaluation and PDF Inference
-The multi-label model is evaluated using a classification report, and its predictions are demonstrated on a PDF document, showing detected risk categories and the most critical chunk.
+**Option B — headless:**
+```bash
+jupyter nbconvert --to notebook --execute \
+  NLP_Pipeline_GoogleStyle.ipynb \
+  --output NLP_Pipeline_executed.ipynb \
+  --ExecutePreprocessor.timeout=-1
+```
 
-## HAN-C: Data Augmentation & Focal Loss Integration
-This advanced version of the HAN (`HAN-C`) incorporates two key improvements:
+Total wall time on a single T4: roughly 2–3 hours for the full
+ablation (Flat BERT + HAN-NoAttn + HAN-CE + HAN-C + multi-label).
+Total compute reported in the paper is under 12 GPU-hours.
 
-### Back-Translation Data Augmentation
-Minority class (risk) chunks are augmented using a back-translation technique (English → Spanish → English) via `MarianMT` models to create paraphrases and increase training data diversity, thereby addressing class imbalance.
+### Hyperparameters (from paper Section 5.3)
 
-### HAN-C Training with Focal Loss
-The `HAN-C` model is trained with a standalone `FocalLoss` implementation, specifically tuned with `alpha=0.75` and `gamma=2.0` to strongly prioritize the minority (risk) class and hard-to-classify examples.
+| Setting | Value |
+|---|---|
+| Encoder | `distilbert-base-uncased` (66M params, all fine-tuned) |
+| Max chunk length | 128 tokens |
+| Max chunks per document | 10 |
+| Optimiser | AdamW |
+| Learning rate | 2 × 10⁻⁵ |
+| Weight decay | 0.01 |
+| Batch size | 4 |
+| Epochs | 3 |
+| Splitter | `GroupShuffleSplit`, seed 42 |
+| Focal loss (HAN-C only) | α = 0.25, γ = 2.0 |
+| Back-translation (HAN-C only) | MarianMT EN → ES → EN, minority chunks |
 
-### HAN-C Evaluation
-Evaluation of HAN-C demonstrates its effectiveness in achieving higher recall for the minority risk class, crucial for governance and compliance applications.
+### What you should see
 
-## End-to-End Pipeline Demo
-This section orchestrates the entire NLP pipeline, taking a raw PDF as input and performing:
-1. NER Extraction
-2. Binary Risk Classification (HAN)
-3. Multi-Label Risk Categorization
-4. PDF Spatial Annotation
+Numbers should match the paper's Table 1 within ±0.01 on each metric
+on a single fixed-seed run. Larger drift usually means a different
+`transformers` version reshaping tokeniser output — pin to the
+versions in `requirements.txt`.
 
-## Results Summary
-| Model | Risk Recall | Risk F1 | Accuracy |
-|--------------------------|-------------|---------|----------|
-| HAN (Cross-Entropy)      | 1.00        | 0.98    | 0.95     |
-| HAN-C (Focal + Back-Translation) | 0.90        | 0.92    | 0.86     |
+## Method (in one paragraph)
 
-HAN-C demonstrates improved recall for the minority risk class, aligning with the project's target of >75% recall for identifying non-compliant documents.
+Each document is parsed into up to 10 paragraph-scale chunks. Each
+chunk is independently encoded by DistilBERT and represented by its
+`[CLS]` embedding `e_i ∈ R^768`. A two-layer MLP attention module
+produces softmax weights `α_i` over the chunks, and the document
+vector `d = Σ α_i e_i` feeds a linear classifier. All DistilBERT
+parameters are fine-tuned end-to-end. The attention weights are kept
+at inference time and surfaced as evidence — the top-attention chunk
+points the reviewer to the passage most responsible for the
+prediction. See Figure 1 in the paper.
+
+## Citation
+
+```bibtex
+@inproceedings{textguard2026,
+  title={TextGuard 2.0: Hierarchical Attention for Compliance Risk
+         Detection in Development-Bank Documents},
+  author={Ramamurthy, Chandan Kumar and Guttikonda, Sai Srinivas and
+          Raghuthaman, Anaswara},
+  year={2026}
+}
+```
+
+## Licenses for existing assets used
+
+- DistilBERT: Apache 2.0 (Sanh et al., 2019)
+- MarianMT EN↔ES: Apache 2.0, Helsinki-NLP `opus-mt` family
+- HuggingFace Transformers: Apache 2.0
+- PyTorch: BSD 3-Clause
+- scikit-learn: BSD 3-Clause
+- spaCy: MIT
+- IDB project documents: publicly disclosed by the Inter-American
+  Development Bank
+
+## Limitations
+
+The paper is honest about these and so is this README:
+
+- 109 documents is modest. A single anomalous test document can move
+  macro-F1 by 2–3 points.
+- Results are from a single document-grouped split, not k-fold CV.
+- The 6.4:1 imbalance is moderate; the focal-loss negative result
+  should not be extrapolated to extreme (50:1+) imbalance regimes.
+- Spanish was the only back-translation pivot we tested.
+
+## Contact
+
+Open an issue on this repo, or email the authors at the addresses on
+the paper.
